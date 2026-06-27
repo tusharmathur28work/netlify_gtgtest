@@ -1,12 +1,10 @@
 export default async (request, context) => {
   const url = new URL(request.url);
   
-  // 1. Rewrite the URL path: remove the "/metrics" prefix
-  const targetPath = url.pathname.replace(/^\/metrics/, "");
-  
+  // 1. Preserve the path prefix (DO NOT strip "/metrics")
   // TARGET CONFIGURATION: Your GTM container ID in lowercase
   const targetOrigin = "https://gtm-tbzzlpq3.fps.goog"; 
-  const targetUrl = `${targetOrigin}${targetPath}${url.search}`;
+  const targetUrl = `${targetOrigin}${url.pathname}${url.search}`;
  
   // 2. Clone and modify the headers
   const headers = new Headers(request.headers);
@@ -41,11 +39,12 @@ export default async (request, context) => {
     redirect: "manual" 
   };
 
+  // Only attach the body for writing requests (POST, PUT, etc.) to prevent fetch errors on GET/HEAD
   if (request.method !== "GET" && request.method !== "HEAD") {
     fetchOptions.body = request.body;
   }
 
-  // 4. Perform the fetch to Google's servers
+  // 4. Perform the fetch to Google's servers (acts as the reverse proxy)
   try {
     const response = await fetch(targetUrl, fetchOptions);
     return response;
