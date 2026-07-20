@@ -47,7 +47,33 @@ export default async (request, context) => {
   // 4. Perform the fetch to Google's servers (acts as the reverse proxy)
   try {
     const response = await fetch(targetUrl, fetchOptions);
-    return response;
+
+    // =========================================================================
+    // 🚀 CACHING OPTIMIZATION: Resolves Grayson's 120ms latency issue
+    // =========================================================================
+    const newHeaders = new Headers(response.headers);
+
+    const isGetOrHead = request.method === "GET" || request.method === "HEAD";
+    const isScript = url.pathname.endsWith(".js") || url.pathname.includes("/gtag/js");
+    const isSuccess = response.status === 200;
+
+    if (isGetOrHead && isScript && isSuccess) {
+      // Cache static container scripts at Netlify Edge POPs (15 min TTL)
+      newHeaders.set(
+        "Netlify-CDN-Cache-Control",
+        "public, max-age=900, stale-while-revalidate=86400"
+      );
+    } else {
+      // Telemetry (/collect), health checks, and errors are NEVER cached
+      newHeaders.set("Cache-Control", "no-store, no-cache, must-revalidate");
+      newHeaders.set("Netlify-CDN-Cache-Control", "no-store");
+    }
+
+    return new Response(response.body, {
+      status: response.status,
+      statusText: response.statusText,
+      headers: newHeaders,
+    });
   } catch (error) {
     return new Response("Error proxying request to Google Tag Gateway", { status: 502 });
   }
@@ -57,3 +83,4 @@ export default async (request, context) => {
 export const config = {
   path: "/metrics/*",
 };
+
