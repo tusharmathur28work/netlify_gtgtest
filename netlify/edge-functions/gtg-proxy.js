@@ -1,19 +1,20 @@
 export default async (request, context) => {
   const url = new URL(request.url);
   
-  // 1. Preserve the path prefix (DO NOT strip "/metrics")
-  // TARGET CONFIGURATION: Your GTM container ID in lowercase
-  const targetOrigin = "https://gtm-tbzzlpq3.fps.goog"; 
+  // 1. Route to root Google Tag Gateway origin (preserves /metrics path)
+  const targetOrigin = "https://fps.goog"; 
   const targetUrl = `${targetOrigin}${url.pathname}${url.search}`;
  
   // 2. Clone and modify the headers
   const headers = new Headers(request.headers);
   
   // CRITICAL SECURITY & ROUTING FIX:
-  // Remove the visitor's Host header so Deno's fetch automatically sets 
-  // the correct Host header matching the targetOrigin.
+  // Remove incoming Host header so Netlify automatically sets "Host: fps.goog"
   headers.delete("host");
-  
+
+  headers.set("X-Gtg-Tag-Id", "GTM-TBZZLPQ3"); // Your GTM container ID or GA4 Tag ID
+  headers.set("X-Gtg-Implementation", "netlify-edge");
+
   // Extract geolocation data provided by Netlify's edge network
   const countryCode = context.geo?.country?.code;
   const regionCode = context.geo?.subdivision?.code;
@@ -21,7 +22,7 @@ export default async (request, context) => {
   const latitude = context.geo?.latitude;
   const longitude = context.geo?.longitude;
 
-  // Inject the specific headers Google expects for regional consent & privacy
+  // Inject geolocation headers for regional privacy compliance
   if (countryCode) {
     headers.set("X-Forwarded-Country", countryCode);
   }
@@ -39,7 +40,6 @@ export default async (request, context) => {
     redirect: "manual" 
   };
 
-  // Only attach the body for writing requests (POST, PUT, etc.) to prevent fetch errors on GET/HEAD
   if (request.method !== "GET" && request.method !== "HEAD") {
     fetchOptions.body = request.body;
   }
@@ -49,7 +49,7 @@ export default async (request, context) => {
     const response = await fetch(targetUrl, fetchOptions);
 
     // =========================================================================
-    // 🚀 CACHING OPTIMIZATION: Resolves Grayson's 120ms latency issue
+    // 🚀 CACHING OPTIMIZATION: Resolves 120ms latency issue
     // =========================================================================
     const newHeaders = new Headers(response.headers);
 
@@ -58,13 +58,13 @@ export default async (request, context) => {
     const isSuccess = response.status === 200;
 
     if (isGetOrHead && isScript && isSuccess) {
-      // Cache static container scripts at Netlify Edge POPs (15 min TTL)
+      // Cache gtm.js at Netlify Edge POPs for 15 mins (drops latency to ~10ms)
       newHeaders.set(
         "Netlify-CDN-Cache-Control",
         "public, max-age=900, stale-while-revalidate=86400"
       );
     } else {
-      // Telemetry (/collect), health checks, and errors are NEVER cached
+      // Telemetry (/collect), health checks, and errors remain live and uncached
       newHeaders.set("Cache-Control", "no-store, no-cache, must-revalidate");
       newHeaders.set("Netlify-CDN-Cache-Control", "no-store");
     }
@@ -83,4 +83,3 @@ export default async (request, context) => {
 export const config = {
   path: "/metrics/*",
 };
-
