@@ -21,15 +21,33 @@ export default async (request, context) => {
   const latitude = context.geo?.latitude;
   const longitude = context.geo?.longitude;
 
-  // Inject the specific headers Google expects for regional consent & privacy
+  // 1. Country
   if (countryCode) {
     headers.set("X-Forwarded-Country", countryCode);
   }
+
+  // 2. Region
   if (regionCode) {
     headers.set("X-Forwarded-Region", regionCode);
   }
+
+  // 3. Combined Country-Region
+  if (countryCode && regionCode) {
+    headers.set("X-Forwarded-CountryRegion", `${countryCode}-${regionCode}`);
+  } else if (countryCode) {
+    headers.set("X-Forwarded-CountryRegion", countryCode);
+  }
+
+  // 4. Geolocation (City & Coordinates completely decoupled)
+  const geoParts = [];
   if (latitude && longitude) {
-    headers.set("X-Forwarded-Geolocation", `latlong=${latitude},${longitude};city=${city || ""}`);
+    geoParts.push(`latlong=${latitude},${longitude}`);
+  }
+  if (city) {
+    geoParts.push(`city=${city}`);
+  }
+  if (geoParts.length > 0) {
+    headers.set("X-Forwarded-Geolocation", geoParts.join(";"));
   }
 
   // 3. Configure the fetch options
