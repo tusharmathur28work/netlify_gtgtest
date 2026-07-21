@@ -14,40 +14,22 @@ export default async (request, context) => {
   // the correct Host header matching the targetOrigin.
   headers.delete("host");
   
-  // Extract geolocation data provided by Netlify's edge network (NO IP USED)
+  // Extract geolocation data provided by Netlify's edge network
   const countryCode = context.geo?.country?.code;
   const regionCode = context.geo?.subdivision?.code;
   const city = context.geo?.city;
   const latitude = context.geo?.latitude;
   const longitude = context.geo?.longitude;
 
-  // 1. Country
+  // Inject the specific headers Google expects for regional consent & privacy
   if (countryCode) {
     headers.set("X-Forwarded-Country", countryCode);
   }
-
-  // 2. Region
   if (regionCode) {
     headers.set("X-Forwarded-Region", regionCode);
   }
-
-  // 3. Combined Country-Region
-  if (countryCode && regionCode) {
-    headers.set("X-Forwarded-CountryRegion", `${countryCode}-${regionCode}`);
-  } else if (countryCode) {
-    headers.set("X-Forwarded-CountryRegion", countryCode);
-  }
-
-  // 4. Geolocation (City & Coordinates completely decoupled)
-  const geoParts = [];
   if (latitude && longitude) {
-    geoParts.push(`latlong=${latitude},${longitude}`);
-  }
-  if (city) {
-    geoParts.push(`city=${city}`);
-  }
-  if (geoParts.length > 0) {
-    headers.set("X-Forwarded-Geolocation", geoParts.join(";"));
+    headers.set("X-Forwarded-Geolocation", `latlong=${latitude},${longitude};city=${city || ""}`);
   }
 
   // 3. Configure the fetch options
@@ -65,33 +47,7 @@ export default async (request, context) => {
   // 4. Perform the fetch to Google's servers (acts as the reverse proxy)
   try {
     const response = await fetch(targetUrl, fetchOptions);
-
-    // =========================================================================
-    // 🚀 LATENCY FIX ONLY: Cache static container scripts at Netlify Edge POPs
-    // =========================================================================
-    const newHeaders = new Headers(response.headers);
-
-    const isGetOrHead = request.method === "GET" || request.method === "HEAD";
-    const isScript = url.pathname.endsWith(".js") || url.pathname.includes("/gtag/js");
-    const isSuccess = response.status === 200;
-
-    if (isGetOrHead && isScript && isSuccess) {
-      // Cache gtm.js at Netlify Edge POPs for 15 mins (drops latency to ~10ms)
-      newHeaders.set(
-        "Netlify-CDN-Cache-Control",
-        "public, max-age=900, stale-while-revalidate=86400"
-      );
-    } else {
-      // Telemetry (/collect), health checks, and errors remain live and uncached
-      newHeaders.set("Cache-Control", "no-store, no-cache, must-revalidate");
-      newHeaders.set("Netlify-CDN-Cache-Control", "no-store");
-    }
-
-    return new Response(response.body, {
-      status: response.status,
-      statusText: response.statusText,
-      headers: newHeaders,
-    });
+    return response;
   } catch (error) {
     return new Response("Error proxying request to Google Tag Gateway", { status: 502 });
   }
