@@ -1,42 +1,63 @@
 export default async (request, context) => {
   const url = new URL(request.url);
-  
+
   // 1. Preserve the path prefix (DO NOT strip "/metrics")
   // TARGET CONFIGURATION: Your GTM container ID in lowercase
-  const targetOrigin = "https://gtm-tbzzlpq3.fps.goog"; 
+  const targetOrigin = "https://gtm-tbzzlpq3.fps.goog";
   const targetUrl = `${targetOrigin}${url.pathname}${url.search}`;
- 
+
   // 2. Clone and modify the headers
   const headers = new Headers(request.headers);
-  
+
   // CRITICAL SECURITY & ROUTING FIX:
-  // Remove the visitor's Host header so Deno's fetch automatically sets 
+  // Remove the visitor's Host header so Deno's fetch automatically sets
   // the correct Host header matching the targetOrigin.
   headers.delete("host");
-  
-  // Extract geolocation data provided by Netlify's edge network
+
+  // Extract geolocation data provided by Netlify's edge network (NO IP ADDRESS USED)
   const countryCode = context.geo?.country?.code;
   const regionCode = context.geo?.subdivision?.code;
   const city = context.geo?.city;
   const latitude = context.geo?.latitude;
   const longitude = context.geo?.longitude;
 
-  // Inject the specific headers Google expects for regional consent & privacy
+  // 1. Country (ISO 3166-1 alpha-2, e.g., "US", "GB", "DE")
   if (countryCode) {
     headers.set("X-Forwarded-Country", countryCode);
   }
+
+  // 2. Region (Subdivision code, e.g., "CA", "NY", "ENG")
   if (regionCode) {
     headers.set("X-Forwarded-Region", regionCode);
   }
+
+  // 3. Combined Country-Region (Required by ManualGeoProcessor to prevent Ashburn fallback)
+  if (countryCode && regionCode) {
+    const formattedRegion = regionCode.includes("-")
+      ? regionCode
+      : `${countryCode}-${regionCode}`;
+    headers.set("X-Forwarded-CountryRegion", formattedRegion);
+  } else if (countryCode) {
+    headers.set("X-Forwarded-CountryRegion", countryCode);
+  }
+
+  // 4. Geolocation (Clean semicolon-delimited formatting)
+  const geoParts = [];
   if (latitude && longitude) {
-    headers.set("X-Forwarded-Geolocation", `latlong=${latitude},${longitude};city=${city || ""}`);
+    geoParts.push(`latlong=${latitude},${longitude}`);
+  }
+  if (city) {
+    geoParts.push(`city=${city}`);
+  }
+  if (geoParts.length > 0) {
+    headers.set("X-Forwarded-Geolocation", geoParts.join(";"));
   }
 
   // 3. Configure the fetch options
   const fetchOptions = {
     method: request.method,
     headers: headers,
-    redirect: "manual" 
+    redirect: "manual",
   };
 
   // Only attach the body for writing requests (POST, PUT, etc.) to prevent fetch errors on GET/HEAD
@@ -47,9 +68,54 @@ export default async (request, context) => {
   // 4. Perform the fetch to Google's servers (acts as the reverse proxy)
   try {
     const response = await fetch(targetUrl, fetchOptions);
-    return response;
+
+    // =========================================================================
+    // 🚀 LATENCY FIX ONLY: Cache static container scripts at Netlify Edge POPs
+    // =========================================================================
+    const newHeaders = new Headers(response.headers);
+    const isGetOrHead = request.method === "GET" || request.method === "HEAD";
+    const isScript =
+      url.pathname.endsWith(".js") || url.pathname.includes("/gtag/js");
+    const isSuccess = response.status === 200;
+
+    if (isGetOrHead && isScript && isSuccess) {
+      // Cache gtm.js at Netlify Edge POPs for 15 mins (drops latency to ~10ms)
+      newHeaders.set(
+        "Netlify-CDN-Cache-Control",
+        "public, max-age=900, stale-while-revalidate=86400"
+      );
+    } else {
+      // Telemetry (/collect), health checks, and errors remain live and uncached
+      newHeaders.set("Cache-Control", "no-store, no-cache, must-revalidate");
+      newHeaders.set("Netlify-CDN-Cache-Control", "no-store");
+    }
+
+    // =========================================================================
+    // 🔍 DEBUGGING: Inspect context.geo in browser DevTools Network tab
+    // =========================================================================
+    newHeaders.set("X-Debug-Geo-Country", countryCode || "null");
+    newHeaders.set("X-Debug-Geo-Region", regionCode || "null");
+    newHeaders.set(
+      "X-Debug-Geo-CountryRegion",
+      countryCode && regionCode
+        ? (regionCode.includes("-") ? regionCode : `${countryCode}-${regionCode}`)
+        : countryCode || "null"
+    );
+    try {
+      newHeaders.set("X-Debug-Context-Geo", JSON.stringify(context.geo || {}));
+    } catch (e) {
+      newHeaders.set("X-Debug-Context-Geo", "serialization-error");
+    }
+
+    return new Response(response.body, {
+      status: response.status,
+      statusText: response.statusText,
+      headers: newHeaders,
+    });
   } catch (error) {
-    return new Response("Error proxying request to Google Tag Gateway", { status: 502 });
+    return new Response("Error proxying request to Google Tag Gateway", {
+      status: 502,
+    });
   }
 };
 
