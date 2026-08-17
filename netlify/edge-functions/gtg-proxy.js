@@ -1,4 +1,4 @@
-const CONTAINER_ID = Deno.env.get("GTG_CONTAINER_ID") || "GTM-XXXXXX";
+const CONTAINER_ID = Deno.env.get("GTG_CONTAINER_ID") || "GTM-TBZZLPQ3";
 const FPS_ORIGIN = `${CONTAINER_ID.toLowerCase()}.fps.goog`;
 
 export default async (request, context) => {
