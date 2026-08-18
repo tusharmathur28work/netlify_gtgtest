@@ -1,10 +1,9 @@
-const CONTAINER_ID = Deno.env.get("GTG_CONTAINER_ID") || "GTM-TBZZLPQ3";
-const FPS_ORIGIN = `${CONTAINER_ID.toLowerCase()}.fps.goog`;
+const CONTAINER_ID = (Deno.env.get("GTG_CONTAINER_ID") || "GTM-TBZZLPQ3").toLowerCase();
+const FPS_ORIGIN = `${CONTAINER_ID}.fps.goog`;
 
 export default async (request, context) => {
   const url = new URL(request.url);
 
-  // Normalize root measurement path for Google FPFE RootMpathHandler compatibility
   let pathname = url.pathname;
   if (pathname === "/metrics") {
     pathname = "/metrics/";
@@ -13,11 +12,9 @@ export default async (request, context) => {
   const targetUrl = new URL(`${pathname}${url.search}`, `https://${FPS_ORIGIN}`);
   const headers = new Headers(request.headers);
 
-  // 1. Host Header Management
   headers.delete("host");
   headers.set("host", FPS_ORIGIN);
 
-  // 2. Geolocation Forwarding (Compliant with Google FPFE ManualGeoProcessor)
   const country = context.geo?.country?.code || "";
   const region = context.geo?.subdivision?.code || "";
   const city = context.geo?.city || "";
@@ -35,7 +32,6 @@ export default async (request, context) => {
     headers.set("x-forwarded-region", region);
   }
 
-  // Google FPFE consolidated coordinate & city header
   const hasCoords = latitude !== undefined && longitude !== undefined;
   if (hasCoords && city) {
     headers.set("x-forwarded-geolocation", `latlong=${latitude},${longitude};city=${city}`);
@@ -45,10 +41,8 @@ export default async (request, context) => {
     headers.set("x-forwarded-geolocation", `city=${city}`);
   }
 
-  // 3. Request Body Handling
-  const body = ["GET", "HEAD"].includes(request.method)
-    ? undefined
-    : await request.arrayBuffer();
+  const isReadMethod = ["GET", "HEAD"].includes(request.method);
+  const body = isReadMethod ? undefined : request.body;
 
   try {
     const upstreamResponse = await fetch(targetUrl.toString(), {
@@ -56,14 +50,13 @@ export default async (request, context) => {
       headers,
       body,
       redirect: "manual",
+      ...(body ? { duplex: "half" } : {}),
     });
-
-    const responseHeaders = new Headers(upstreamResponse.headers);
 
     return new Response(upstreamResponse.body, {
       status: upstreamResponse.status,
       statusText: upstreamResponse.statusText,
-      headers: responseHeaders,
+      headers: upstreamResponse.headers,
     });
   } catch (error) {
     console.error("GTG Netlify Edge Proxy Error:", error);
@@ -74,3 +67,4 @@ export default async (request, context) => {
 export const config = {
   path: ["/metrics", "/metrics/*"],
 };
+
